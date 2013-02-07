@@ -68,6 +68,7 @@
 #include "Logger.h"
 #include "Option.h"
 #include "DownloadContext.h"
+#include "DownloadResult.h"
 #include "BufferedFile.h"
 #include "SocketCore.h"
 #include "prefs.h"
@@ -1776,6 +1777,98 @@ void executeHook
 #endif
 }
 
+void executeHook
+(const std::string& command,
+ a2_gid_t gid,
+ size_t numFiles,
+ const std::string& firstFilename,
+ int downloadSpeed)
+{
+  const std::string gidStr = GroupId::toHex(gid);
+  const std::string numFilesStr = util::uitos(numFiles);
+  const std::string downloadSpeedStr = util::itos(downloadSpeed);
+#ifndef __MINGW32__
+  A2_LOG_INFO(fmt("Executing user command: %s %s %s %s %s",
+                  command.c_str(),
+                  gidStr.c_str(),
+                  numFilesStr.c_str(),
+                  firstFilename.c_str(),
+                  downloadSpeedStr.c_str()));
+  pid_t cpid = fork();
+  if(cpid == -1) {
+    A2_LOG_ERROR("fork() failed. Cannot execute user command.");
+  } else if(cpid == 0) {
+    execlp(command.c_str(),
+           command.c_str(),
+           gidStr.c_str(),
+           numFilesStr.c_str(),
+           firstFilename.c_str(),
+           downloadSpeedStr.c_str(),
+           reinterpret_cast<char*>(0));
+    perror(("Could not execute user command: "+command).c_str());
+    exit(EXIT_FAILURE);
+  }
+#else
+  PROCESS_INFORMATION pi;
+  STARTUPINFOW si;
+
+  memset(&si, 0, sizeof (si));
+  si.cb = sizeof(STARTUPINFO);
+  memset(&pi, 0, sizeof (pi));
+  bool batch = util::iendsWith(command, ".bat");
+  std::string cmdline;
+  std::string cmdexe;
+  if(batch) {
+    const char* p = getenv("windir");
+    if(p) {
+      cmdexe = p;
+      cmdexe += "\\system32\\cmd.exe";
+    } else {
+      A2_LOG_INFO("Failed to get windir environment variable."
+                  " Executing batch file will fail.");
+      // TODO Might be useless.
+      cmdexe = "cmd.exe";
+    }
+    cmdline += "/C \"";
+  }
+  cmdline += "\"";
+  cmdline += command;
+  cmdline += "\"";
+  cmdline += " ";
+  cmdline += gidStr;
+  cmdline += " ";
+  cmdline += numFilesStr;
+  cmdline += " \"";
+  cmdline += firstFilename;
+  cmdline += "\"";
+  cmdline += " ";
+  cmdline += downloadSpeed;
+  if(batch) {
+    cmdline += "\"";
+  }
+  int cmdlineLen = utf8ToWChar(0, 0, cmdline.c_str());
+  assert(cmdlineLen > 0);
+  array_ptr<wchar_t> wcharCmdline(new wchar_t[cmdlineLen]);
+  cmdlineLen = utf8ToWChar(wcharCmdline, cmdlineLen, cmdline.c_str());
+  assert(cmdlineLen > 0);
+  A2_LOG_INFO(fmt("Executing user command: %s", cmdline.c_str()));
+  DWORD rc = CreateProcessW(batch ? utf8ToWChar(cmdexe).c_str() : NULL,
+                            wcharCmdline,
+                            NULL,
+                            NULL,
+                            true,
+                            0,
+                            NULL,
+                            0,
+                            &si,
+                            &pi);
+
+  if(!rc) {
+    A2_LOG_ERROR("CreateProcess() failed. Cannot execute user command.");
+  }
+#endif
+}
+
 } // namespace
 
 void executeHookByOptName
@@ -1800,7 +1893,19 @@ void executeHookByOptName
       }
       numFiles = dctx->countRequestedFileEntry();
     }
-    executeHook(cmd, group->getGID(), numFiles, firstFilename);
+    if (pref == PREF_ON_DOWNLOAD_COMPLETE) {
+      SharedHandle<DownloadResult> dr = group->createDownloadResult();
+      int downloadSpeed;
+      if(dr->sessionTime > 0) {
+        downloadSpeed = dr->sessionDownloadLength * 1000 / dr->sessionTime;
+      } else {
+        downloadSpeed = -1;
+      }
+      executeHook(cmd, group->getGID(), numFiles, firstFilename,
+                  downloadSpeed);
+    } else {
+      executeHook(cmd, group->getGID(), numFiles, firstFilename);
+    }
   }
 }
 
