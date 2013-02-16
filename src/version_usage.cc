@@ -78,6 +78,11 @@ void showVersion() {
             << "\n"
             << fmt(_("Report bugs to %s"), PACKAGE_BUGREPORT) << "\n"
             << _("Visit") << " " << PACKAGE_URL << std::endl;
+
+  std::cout << "\n"
+            << "** Note **" << "\n"
+            << "This version modified by FengGu(flygoast@126.com)" << "\n"
+            << "Repo: https://github.com/flygoast/aria2" << std::endl;
 }
 
 void showUsage
